@@ -21,6 +21,10 @@ $ sudo insmod ec_su_axb35
 
 # Devices
 ```
+# Info device
+/sys/class/ec_su_axb35/info/                    - Board and EC information
+/sys/class/ec_su_axb35/info/version        (RO) - EC firmware version (e.g. 1.10)
+
 # Fan devices
 /sys/class/ec_su_axb35/fan1/                    - CPU fan 1
 /sys/class/ec_su_axb35/fan2/                    - CPU fan 2
@@ -30,6 +34,14 @@ $ sudo insmod ec_su_axb35
 /sys/class/ec_su_axb35/fanX/level          (RW) - [0-5] (0=0%, 1=20%, ..., 5=100%)
 /sys/class/ec_su_axb35/fanX/rampup_curve   (RW) - 5 values (°C thresholds for level 1-5)
 /sys/class/ec_su_axb35/fanX/rampdown_curve (RW) - 5 values (°C thresholds for level 1-5)
+
+# Fan Auto PWM settings (available for EC v1.10+, shared for fan1 and fan2)
+/sys/class/ec_su_axb35/fanX/auto_pwm_enable     (RW) - enable advanced auto pwm control [0, 1]
+/sys/class/ec_su_axb35/fanX/auto_pwm_off_temp   (RW) - °C to turn fan off
+/sys/class/ec_su_axb35/fanX/auto_pwm_start_temp (RW) - °C to start fan
+/sys/class/ec_su_axb35/fanX/auto_pwm_full_temp  (RW) - °C for full speed
+/sys/class/ec_su_axb35/fanX/auto_pwm_start_pct  (RW) - minimum % when starting at start_temp
+/sys/class/ec_su_axb35/fanX/auto_pwm_slope      (RW) - % increase per °C
 
 # Temperature device
 /sys/class/ec_su_axb35/temp1/                   - CPU temperature in °C

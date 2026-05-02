@@ -22,3 +22,21 @@ for i in 1 2 3; do
     
 done
 printf "+-----+-------+-------+------+----------------+----------------+\n"
+
+# Auto PWM Settings (only if supported)
+if [ -f /sys/class/ec_su_axb35/fan1/auto_pwm_enable ]; then
+    printf "\n+--------------------------------------------------------------+\n"
+    printf "| %-60s |\n" "AUTO PWM SETTINGS"
+    printf "+-----+--------+---------+----------+---------+-------+--------+\n"
+    printf "| %-3s | %-6s | %-7s | %-8s | %-7s | %-5s | %-6s |\n" "FAN" "ENABLE" "OFF" "START" "FULL" "MIN %" "SLOPE"
+    for i in 1 2 3; do
+        en=$(cat /sys/class/ec_su_axb35/fan${i}/auto_pwm_enable)
+        off=$(cat /sys/class/ec_su_axb35/fan${i}/auto_pwm_off_temp)
+        start=$(cat /sys/class/ec_su_axb35/fan${i}/auto_pwm_start_temp)
+        full=$(cat /sys/class/ec_su_axb35/fan${i}/auto_pwm_full_temp)
+        pct=$(cat /sys/class/ec_su_axb35/fan${i}/auto_pwm_start_pct)
+        slope=$(cat /sys/class/ec_su_axb35/fan${i}/auto_pwm_slope)
+        printf "| %-3d | %-6s | %-7s | %-8s | %-7s | %-5s | %-6s |\n" $i "$en" "$off" "$start" "$full" "$pct" "$slope"
+    done
+    printf "+-----+--------+---------+----------+---------+-------+--------+\n"
+fi

@@ -27,6 +27,7 @@ struct ec_fan {
     u8             rampdown_curve[6];
     enum fan_mode  mode;
     struct device *dev;
+    u8             auto_pwm_reg;
 };
 
 struct ec_temp {
@@ -43,7 +44,14 @@ struct ec_apu {
     struct device *dev;
 };
 
+struct ec_info {
+    const char    *name;
+    struct device *dev;
+};
+
 static struct class *ec_class;
+static u8 ec_version_major;
+static u8 ec_version_minor;
 
 static struct ec_fan ec_fans[] = {
     { .name           = "fan1",
@@ -51,19 +59,22 @@ static struct ec_fan ec_fans[] = {
       .speed_reg_low  = 0x36,
       .mode_reg       = 0x21,
       .rampup_curve   = { 0, 60, 70, 83, 95, 97 },
-      .rampdown_curve = { 0, 40, 50, 80, 94, 96 } },
+      .rampdown_curve = { 0, 40, 50, 80, 94, 96 },
+      .auto_pwm_reg   = 0x60 },
     { .name           = "fan2",
       .speed_reg_high = 0x37,
       .speed_reg_low  = 0x38,
       .mode_reg       = 0x23,
       .rampup_curve   = { 0, 60, 70, 83, 95, 97 },
-      .rampdown_curve = { 0, 40, 50, 80, 94, 96 } },
+      .rampdown_curve = { 0, 40, 50, 80, 94, 96 },
+      .auto_pwm_reg   = 0x60 },
     { .name           = "fan3",
       .speed_reg_high = 0x28,
       .speed_reg_low  = 0x29,
       .mode_reg       = 0x25,
       .rampup_curve   = { 0, 20, 60, 83, 95, 97 },
-      .rampdown_curve = { 0, 0, 50, 80, 94, 96 } },
+      .rampdown_curve = { 0, 0, 50, 80, 94, 96 },
+      .auto_pwm_reg   = 0x66 },
 };
 
 static struct ec_temp ec_temp = {
@@ -75,6 +86,106 @@ static struct ec_apu ec_apu = {
     .name           = "apu",
     .power_mode_reg = 0x31,
 };
+
+static struct ec_info ec_info = {
+    .name = "info",
+};
+
+static bool is_auto_pwm_supported(void)
+{
+    if (ec_version_major > 1)
+        return true;
+    if (ec_version_major == 1 && ec_version_minor >= 10)
+        return true;
+    return false;
+}
+
+static ssize_t fan_auto_pwm_show(struct device *dev, struct device_attribute *attr,
+                                 char *buf)
+{
+    struct ec_fan *fan = dev_get_drvdata(dev);
+    u8 val;
+    int offset;
+    int ret;
+
+    if (strcmp(attr->attr.name, "auto_pwm_enable") == 0) offset = 0;
+    else if (strcmp(attr->attr.name, "auto_pwm_off_temp") == 0) offset = 1;
+    else if (strcmp(attr->attr.name, "auto_pwm_start_temp") == 0) offset = 2;
+    else if (strcmp(attr->attr.name, "auto_pwm_full_temp") == 0) offset = 3;
+    else if (strcmp(attr->attr.name, "auto_pwm_start_pct") == 0) offset = 4;
+    else if (strcmp(attr->attr.name, "auto_pwm_slope") == 0) offset = 5;
+    else return -EINVAL;
+
+    ret = ec_read(fan->auto_pwm_reg + offset, &val);
+    if (ret)
+        return ret;
+
+    return sprintf(buf, "%u\n", val);
+}
+
+static ssize_t fan_auto_pwm_store(struct device *dev, struct device_attribute *attr,
+                                  const char *buf, size_t count)
+{
+    struct ec_fan *fan = dev_get_drvdata(dev);
+    u8 val;
+    int offset;
+
+    if (strcmp(attr->attr.name, "auto_pwm_enable") == 0) offset = 0;
+    else if (strcmp(attr->attr.name, "auto_pwm_off_temp") == 0) offset = 1;
+    else if (strcmp(attr->attr.name, "auto_pwm_start_temp") == 0) offset = 2;
+    else if (strcmp(attr->attr.name, "auto_pwm_full_temp") == 0) offset = 3;
+    else if (strcmp(attr->attr.name, "auto_pwm_start_pct") == 0) offset = 4;
+    else if (strcmp(attr->attr.name, "auto_pwm_slope") == 0) offset = 5;
+    else return -EINVAL;
+
+    if (kstrtou8(buf, 10, &val))
+        return -EINVAL;
+
+    ec_write(fan->auto_pwm_reg + offset, val);
+    return count;
+}
+
+static struct device_attribute dev_attr_fan_auto_pwm_enable =
+    __ATTR(auto_pwm_enable, 0644, fan_auto_pwm_show, fan_auto_pwm_store);
+static struct device_attribute dev_attr_fan_auto_pwm_off_temp =
+    __ATTR(auto_pwm_off_temp, 0644, fan_auto_pwm_show, fan_auto_pwm_store);
+static struct device_attribute dev_attr_fan_auto_pwm_start_temp =
+    __ATTR(auto_pwm_start_temp, 0644, fan_auto_pwm_show, fan_auto_pwm_store);
+static struct device_attribute dev_attr_fan_auto_pwm_full_temp =
+    __ATTR(auto_pwm_full_temp, 0644, fan_auto_pwm_show, fan_auto_pwm_store);
+static struct device_attribute dev_attr_fan_auto_pwm_start_pct =
+    __ATTR(auto_pwm_start_pct, 0644, fan_auto_pwm_show, fan_auto_pwm_store);
+static struct device_attribute dev_attr_fan_auto_pwm_slope =
+    __ATTR(auto_pwm_slope, 0644, fan_auto_pwm_show, fan_auto_pwm_store);
+
+static struct device_attribute *auto_pwm_attrs[] = {
+    &dev_attr_fan_auto_pwm_enable,
+    &dev_attr_fan_auto_pwm_off_temp,
+    &dev_attr_fan_auto_pwm_start_temp,
+    &dev_attr_fan_auto_pwm_full_temp,
+    &dev_attr_fan_auto_pwm_start_pct,
+    &dev_attr_fan_auto_pwm_slope,
+};
+
+static ssize_t version_show(struct device *dev, struct device_attribute *attr,
+                            char *buf)
+{
+    u8 major, minor;
+    int ret;
+
+    ret = ec_read(0x00, &major);
+    if (ret)
+        return ret;
+
+    ret = ec_read(0x01, &minor);
+    if (ret)
+        return ret;
+
+    return sprintf(buf, "%u.%u\n", major, minor);
+}
+
+static struct device_attribute dev_attr_version =
+    __ATTR(version, 0444, version_show, NULL);
 
 static ssize_t fan_rpm_show(struct device *dev, struct device_attribute *attr,
                             char *buf)
@@ -103,6 +214,7 @@ static void update_fan_mode(struct ec_fan *fan)
     ec_read(fan->mode_reg, &val);
 
     switch (val) {
+    case 0x00:
     case 0x10:
     case 0x20:
     case 0x30:
@@ -253,19 +365,22 @@ static ssize_t fan_mode_store(struct device *dev, struct device_attribute *attr,
 
     switch (fan->mode) {
     case AUTO:
-        fan->mode = AUTO;
-        switch (fan->mode_reg) {
-        case 0x21:
-            val = 0x10;
-            break;
-        case 0x23:
-            val = 0x20;
-            break;
-        case 0x25:
-            val = 0x30;
-            break;
-        default:
-            return -EINVAL;
+        if (is_auto_pwm_supported()) {
+            val = 0x00;
+        } else {
+            switch (fan->mode_reg) {
+            case 0x21:
+                val = 0x10;
+                break;
+            case 0x23:
+                val = 0x20;
+                break;
+            case 0x25:
+                val = 0x30;
+                break;
+            default:
+                return -EINVAL;
+            }
         }
         break;
     case FIXED:
@@ -529,10 +644,14 @@ static struct class *ec_class;
 
 static int __init ec_su_axb35_init(void)
 {
-    int i;
+    int i, j;
     int ret;
 
-    ret = alloc_chrdev_region(&ec_su_axb35_dev, 0, ARRAY_SIZE(ec_fans) + 2,
+    // Detect version early
+    ec_read(0x00, &ec_version_major);
+    ec_read(0x01, &ec_version_minor);
+
+    ret = alloc_chrdev_region(&ec_su_axb35_dev, 0, ARRAY_SIZE(ec_fans) + 3,
                               "ec_su_axb35");
     if (ret < 0) {
         pr_err("ec_su_axb35: Failed to allocation major number\n");
@@ -546,7 +665,7 @@ static int __init ec_su_axb35_init(void)
 #endif
 
     if (IS_ERR(ec_class)) {
-        unregister_chrdev_region(ec_su_axb35_dev, ARRAY_SIZE(ec_fans) + 2);
+        unregister_chrdev_region(ec_su_axb35_dev, ARRAY_SIZE(ec_fans) + 3);
         return PTR_ERR(ec_class);
     }
 
@@ -564,6 +683,13 @@ static int __init ec_su_axb35_init(void)
         device_create_file(fan->dev, &dev_attr_fan_level);
         device_create_file(fan->dev, &dev_attr_fan_rampup_curve);
         device_create_file(fan->dev, &dev_attr_fan_rampdown_curve);
+        
+        if (is_auto_pwm_supported()) {
+            for (j = 0; j < ARRAY_SIZE(auto_pwm_attrs); j++) {
+                device_create_file(fan->dev, auto_pwm_attrs[j]);
+            }
+        }
+
         update_fan_mode(fan);
     }
 
@@ -585,16 +711,25 @@ static int __init ec_su_axb35_init(void)
         device_create_file(ec_apu.dev, &dev_attr_apu_power_mode);
     }
 
+    ec_info.dev = device_create(
+        ec_class, NULL, MKDEV(MAJOR(ec_su_axb35_dev), ARRAY_SIZE(ec_fans) + 2),
+        &ec_info, ec_info.name);
+    if (!IS_ERR(ec_info.dev)) {
+        dev_set_drvdata(ec_info.dev, &ec_info);
+        device_create_file(ec_info.dev, &dev_attr_version);
+    }
+
     INIT_DELAYED_WORK(&ec_update_work, ec_update_worker);
     schedule_delayed_work(&ec_update_work, msecs_to_jiffies(1000));
 
-    pr_info("ec_su_axb35: Sixunited AXB35-02 EC driver loaded\n");
+    pr_info("ec_su_axb35: Sixunited AXB35-02 EC driver loaded (EC version %u.%u)\n", 
+            ec_version_major, ec_version_minor);
     return 0;
 }
 
 static void __exit ec_su_axb35_exit(void)
 {
-    int i;
+    int i, j;
     for (i = 0; i < ARRAY_SIZE(ec_fans); i++) {
         if (!IS_ERR(ec_fans[i].dev)) {
             device_remove_file(ec_fans[i].dev, &dev_attr_fan_rpm);
@@ -602,6 +737,13 @@ static void __exit ec_su_axb35_exit(void)
             device_remove_file(ec_fans[i].dev, &dev_attr_fan_level);
             device_remove_file(ec_fans[i].dev, &dev_attr_fan_rampup_curve);
             device_remove_file(ec_fans[i].dev, &dev_attr_fan_rampdown_curve);
+            
+            if (is_auto_pwm_supported()) {
+                for (j = 0; j < ARRAY_SIZE(auto_pwm_attrs); j++) {
+                    device_remove_file(ec_fans[i].dev, auto_pwm_attrs[j]);
+                }
+            }
+
             device_destroy(ec_class, MKDEV(MAJOR(ec_su_axb35_dev), i));
         }
     }
@@ -620,10 +762,16 @@ static void __exit ec_su_axb35_exit(void)
                        MKDEV(MAJOR(ec_su_axb35_dev), ARRAY_SIZE(ec_fans) + 1));
     }
 
+    if (!IS_ERR(ec_info.dev)) {
+        device_remove_file(ec_info.dev, &dev_attr_version);
+        device_destroy(ec_class,
+                       MKDEV(MAJOR(ec_su_axb35_dev), ARRAY_SIZE(ec_fans) + 2));
+    }
+
     cancel_delayed_work_sync(&ec_update_work);
 
     class_destroy(ec_class);
-    unregister_chrdev_region(ec_su_axb35_dev, ARRAY_SIZE(ec_fans) + 2);
+    unregister_chrdev_region(ec_su_axb35_dev, ARRAY_SIZE(ec_fans) + 3);
     pr_info("ec_su_axb35: Module unloaded\n");
 }
 
