@@ -37,7 +37,7 @@ import json
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import threading
-import time
+import queue
 import os
 
 CONFIG_PATH = "/etc/ec-fan-control.json"
@@ -53,7 +53,11 @@ class FanControlGUI:
         self.base_path = BASE_PATH
         self.update_interval = 1.0
         self.running = True
+        self.stop_event = threading.Event()
+        self.ui_queue = queue.Queue()
+        self.ui_after_id = None
         self.mode_check_timer = None
+        self.fan_mode_check_timers = {}
         self.curve_write_delay = 0.4  # seconds
         # (fan, curve) -> generation counter
         self.curve_write_gen = {}
@@ -62,6 +66,10 @@ class FanControlGUI:
         
         # Create GUI
         self.create_widgets()
+
+        # Only the main thread may interact with Tk. Worker threads put UI
+        # callbacks on this queue, which is drained from the Tk event loop.
+        self.ui_after_id = self.root.after(50, self.process_ui_queue)
         
         # Start monitoring thread
         self.monitor_thread = threading.Thread(target=self.monitor_loop, daemon=True)
@@ -69,6 +77,25 @@ class FanControlGUI:
         
         # Initial mode read
         self.read_all_modes()
+
+    def queue_ui(self, callback):
+        """Queue a Tk callback for execution by the main thread."""
+        if self.running:
+            self.ui_queue.put(callback)
+
+    def process_ui_queue(self):
+        """Execute callbacks queued by worker threads."""
+        if not self.running:
+            return
+
+        while True:
+            try:
+                callback = self.ui_queue.get_nowait()
+            except queue.Empty:
+                break
+            callback()
+
+        self.ui_after_id = self.root.after(50, self.process_ui_queue)
         
     def read_sysfs(self, path):
         """Read value from sysfs file"""
@@ -86,7 +113,9 @@ class FanControlGUI:
                 f.write(str(value))
             return True
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to write to {path}: {e}")
+            self.queue_ui(lambda error=e: messagebox.showerror(
+                "Error", f"Failed to write to {path}: {error}"
+            ))
             return False
     
     def create_widgets(self):
@@ -288,6 +317,7 @@ class FanControlGUI:
             if self.mode_check_timer:
                 self.mode_check_timer.cancel()
             self.mode_check_timer = threading.Timer(10.0, self.read_apu_mode)
+            self.mode_check_timer.daemon = True
             self.mode_check_timer.start()
     
     def on_fan_mode_change(self, fan_num):
@@ -304,7 +334,13 @@ class FanControlGUI:
                 self.read_fan_curves(fan_num)
             
             # Schedule mode verification after 10 seconds
-            threading.Timer(10.0, lambda: self.read_fan_mode(fan_num)).start()
+            old_timer = self.fan_mode_check_timers.get(fan_num)
+            if old_timer:
+                old_timer.cancel()
+            timer = threading.Timer(10.0, self.read_fan_mode, args=(fan_num,))
+            timer.daemon = True
+            self.fan_mode_check_timers[fan_num] = timer
+            timer.start()
     
     def update_fan_mode_ui(self, fan_num, mode):
         """Show/hide controls based on fan mode"""
@@ -352,6 +388,7 @@ class FanControlGUI:
             self.curve_write_delay,
             lambda: do_write(gen)
         )
+        timer.daemon = True
 
         self.curve_write_timers[key] = timer
         timer.start()
@@ -480,11 +517,11 @@ class FanControlGUI:
                     if f'[{m}]' in mode:
                         mode = m
                         break
-            self.root.after(0, lambda: self.fan_controls[fan_num]['mode_var'].set(mode))
-            self.root.after(0, lambda: self.update_fan_mode_ui(fan_num, mode))
+            self.queue_ui(lambda m=mode: self.fan_controls[fan_num]['mode_var'].set(m))
+            self.queue_ui(lambda m=mode: self.update_fan_mode_ui(fan_num, m))
             # If mode is curve, read the current curve values
             if mode == 'curve':
-                self.root.after(0, lambda: self.read_fan_curves(fan_num))
+                self.queue_ui(lambda: self.read_fan_curves(fan_num))
     
     def read_all_modes(self):
         """Read all fan modes and APU mode"""
@@ -503,7 +540,7 @@ class FanControlGUI:
                     if f'[{m}]' in mode:
                         mode = m
                         break
-            self.root.after(0, lambda: self.apu_mode_var.set(mode))
+            self.queue_ui(lambda m=mode: self.apu_mode_var.set(m))
     
     def monitor_loop(self):
         """Background thread to monitor temperature and RPM"""
@@ -513,7 +550,7 @@ class FanControlGUI:
                 temp_path = f"{self.base_path}/temp1/temp"
                 temp = self.read_sysfs(temp_path)
                 if temp:
-                    self.root.after(0, lambda t=temp: self.temp_label.config(text=f"{t}°C"))
+                    self.queue_ui(lambda t=temp: self.temp_label.config(text=f"{t}°C"))
                 
                 # Read fan RPMs
                 for fan_num in [1, 2, 3]:
@@ -521,20 +558,20 @@ class FanControlGUI:
                     rpm = self.read_sysfs(rpm_path)
                     if rpm:
                         if fan_num == 1:
-                            self.root.after(0, lambda r=rpm: self.fan1_rpm_label.config(text=r))
+                            self.queue_ui(lambda r=rpm: self.fan1_rpm_label.config(text=r))
                         elif fan_num == 2:
-                            self.root.after(0, lambda r=rpm: self.fan2_rpm_label.config(text=r))
+                            self.queue_ui(lambda r=rpm: self.fan2_rpm_label.config(text=r))
                         elif fan_num == 3:
-                            self.root.after(0, lambda r=rpm: self.fan3_rpm_label.config(text=r))
+                            self.queue_ui(lambda r=rpm: self.fan3_rpm_label.config(text=r))
                         
                         # Update fan control block RPM
-                        self.root.after(0, lambda fn=fan_num, r=rpm: 
+                        self.queue_ui(lambda fn=fan_num, r=rpm:
                                       self.fan_controls[fn]['rpm_label'].config(text=r))
                 
             except Exception as e:
                 print(f"Monitor error: {e}")
             
-            time.sleep(self.update_interval)
+            self.stop_event.wait(self.update_interval)
 
     def save_config(self):
         data = {
@@ -609,8 +646,17 @@ class FanControlGUI:
     def on_closing(self):
         """Handle window close"""
         self.running = False
+        self.stop_event.set()
         if self.mode_check_timer:
             self.mode_check_timer.cancel()
+        for timer in self.fan_mode_check_timers.values():
+            timer.cancel()
+        for timer in self.curve_write_timers.values():
+            timer.cancel()
+        if self.ui_after_id is not None:
+            self.root.after_cancel(self.ui_after_id)
+            self.ui_after_id = None
+        self.monitor_thread.join(timeout=1.0)
         self.root.destroy()
 
 def main():
