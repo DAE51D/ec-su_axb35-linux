@@ -595,6 +595,31 @@ static int __init ec_su_axb35_init(void)
 static void __exit ec_su_axb35_exit(void)
 {
     int i;
+
+    /* Reset all fans to AUTO mode before unloading */
+    for (i = 0; i < ARRAY_SIZE(ec_fans); i++) {
+        struct ec_fan *fan = &ec_fans[i];
+        u8 val;
+
+        fan->mode = AUTO;
+
+        switch (fan->mode_reg) {
+        case 0x21: // Fan 1
+            val = 0x10;
+            break;
+        case 0x23: // Fan 2
+            val = 0x20;
+            break;
+        case 0x25: // Fan 3
+            val = 0x30;
+            break;
+        default:
+            continue;
+        }
+        ec_write(fan->mode_reg, val);
+        pr_info("ec_su_axb35: %s reset to AUTO mode\n", fan->name);
+    }
+
     for (i = 0; i < ARRAY_SIZE(ec_fans); i++) {
         if (!IS_ERR(ec_fans[i].dev)) {
             device_remove_file(ec_fans[i].dev, &dev_attr_fan_rpm);

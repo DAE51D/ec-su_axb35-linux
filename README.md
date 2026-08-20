@@ -7,6 +7,7 @@ Vendors using that board:
   - FEVM FA-EX9
   - Peladn YO1
   - NIMO AI MiniPC
+  - Corsair AI Workstation 300
 
 An update to date list can be found [here](https://strixhalo-homelab.d7.wtf/Hardware/Boards/Sixunited-AXB35)
 
