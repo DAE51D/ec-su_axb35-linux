@@ -51,8 +51,6 @@ struct ec_button {
     struct input_dev *input;
 };
 
-static struct class *ec_class;
-
 /* Register a power-mode button input device that emits KEY_POWER on change.
  * Default off: the D-Bus service (com.evox2.powermode) already polls the
  * power-mode sysfs attribute and updates the desktop, so the input event is
@@ -515,22 +513,27 @@ static ssize_t apu_power_mode_store(struct device           *dev,
 static struct device_attribute dev_attr_apu_power_mode =
     __ATTR(power_mode, 0644, apu_power_mode_show, apu_power_mode_store);
 
+/* Only runs when the input_button module param is enabled. The power-mode
+ * register changes for reasons other than a physical button press (e.g. a
+ * userspace write to the power_mode sysfs attribute), so this is gated on the
+ * opt-in param and only emits/logs when the input device is actually present. */
 static void poll_power_button(void)
 {
     u8 val;
+
+    if (!input_button || !ec_power_button.input)
+        return;
 
     if (ec_read(ec_power_button.reg, &val) != 0)
         return;
 
     if (val != ec_power_button.last_val) {
         ec_power_button.last_val = val;
-        if (ec_power_button.input) {
-            input_report_key(ec_power_button.input, KEY_POWER, 1);
-            input_sync(ec_power_button.input);
-            input_report_key(ec_power_button.input, KEY_POWER, 0);
-            input_sync(ec_power_button.input);
-        }
-        pr_info("ec_su_axb35: power mode button pressed (mode=%u)\n", val);
+        input_report_key(ec_power_button.input, KEY_POWER, 1);
+        input_sync(ec_power_button.input);
+        input_report_key(ec_power_button.input, KEY_POWER, 0);
+        input_sync(ec_power_button.input);
+        pr_info("ec_su_axb35: power mode changed (mode=%u)\n", val);
     }
 }
 
@@ -713,8 +716,9 @@ static void __exit ec_su_axb35_exit(void)
     cancel_delayed_work_sync(&ec_update_work);
 
     if (ec_power_button.input) {
+        /* input_unregister_device() drops the last reference and frees the
+         * device; calling input_free_device() too would double-free it. */
         input_unregister_device(ec_power_button.input);
-        input_free_device(ec_power_button.input);
         ec_power_button.input = NULL;
     }
 
